@@ -35,13 +35,13 @@ jobs:
             c_compiler: cl
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
     - name: Set reusable strings
       id: strings
       shell: bash
-      run: |
-        echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
+      run: echo "build-output-dir=build" >> "$GITHUB_OUTPUT"
 
     - name: Configure CMake
       run: >
@@ -58,12 +58,19 @@ jobs:
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: ctest --build-config ${{ matrix.build_type }}
 
-    - name: Package artifact (zip)
-      # zip化して後のreleaseジョブでまとめて添付
+    # Linux 用 zip
+    - name: Package artifact (Linux)
+      if: matrix.os != 'windows-latest'
       shell: bash
       run: |
-        cd ${{ steps.strings.outputs.build-output-dir }}
-        zip -r ../build-${{ matrix.os }}-${{ matrix.c_compiler }}.zip .
+        zip -r build-${{ matrix.os }}-${{ matrix.c_compiler }}.zip ${{ steps.strings.outputs.build-output-dir }}
+
+    # Windows 用 zip
+    - name: Package artifact (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        Compress-Archive -Path "${{ steps.strings.outputs.build-output-dir }}\*" -DestinationPath "build-${{ matrix.os }}-${{ matrix.c_compiler }}.zip"
 
     - name: Upload artifact for release
       uses: actions/upload-artifact@v4
@@ -93,22 +100,36 @@ jobs:
         draft: false
         prerelease: false
 
-    - name: Upload assets to release
+    # アップロード — ここでは OS/コンパイラごとに複数添付
+    - name: Upload Ubuntu GCC
+      if: hashFiles('artifacts/build-ubuntu-latest-gcc.zip') != ''
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./artifacts/build-ubuntu-latest-gcc.zip
+        asset_path: artifacts/build-ubuntu-latest-gcc.zip
         asset_name: build-ubuntu-latest-gcc.zip
         asset_content_type: application/zip
 
-    - name: Upload other OS/Compiler assets (optional)
+    - name: Upload Ubuntu Clang
+      if: hashFiles('artifacts/build-ubuntu-latest-clang.zip') != ''
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./artifacts/build-ubuntu-latest-clang.zip
+        asset_path: artifacts/build-ubuntu-latest-clang.zip
         asset_name: build-ubuntu-latest-clang.zip
+        asset_content_type: application/zip
+
+    - name: Upload Windows MSVC
+      if: hashFiles('artifacts/build-windows-latest-cl.zip') != ''
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/build-windows-latest-cl.zip
+        asset_name: build-windows-latest-cl.zip
         asset_content_type: application/zip
