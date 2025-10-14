@@ -43,6 +43,27 @@ jobs:
       shell: bash
       run: echo "build-output-dir=build" >> "$GITHUB_OUTPUT"
 
+    # CMake ビルドキャッシュ
+    - name: Cache CMake build
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.strings.outputs.build-output-dir }}
+        key: ${{ runner.os }}-${{ matrix.c_compiler }}-cmake-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.c_compiler }}-cmake-
+
+    # コンパイラキャッシュ (ccache for Linux, sccache for all)
+    - name: Setup ccache (Linux)
+      if: runner.os == 'Linux'
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: ${{ matrix.os }}-${{ matrix.c_compiler }}
+        max-size: 500M
+
+    - name: Setup sccache (Windows)
+      if: runner.os == 'Windows'
+      uses: mozilla-actions/sccache-action@v0.0.6
+
     - name: Configure CMake
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
@@ -81,7 +102,9 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
 
     steps:
     - name: Download all artifacts
@@ -89,47 +112,19 @@ jobs:
       with:
         path: artifacts
 
+    - name: Prepare release files
+      run: |
+        mkdir -p release-files
+        find artifacts -name "*.zip" -exec cp {} release-files/ \;
+        ls -la release-files/
+
     - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ github.run_number }}
-        release_name: "Release ${{ github.run_number }}"
+        name: "Release ${{ github.run_number }}"
         draft: false
         prerelease: false
-
-    # アップロード — ここでは OS/コンパイラごとに複数添付
-    - name: Upload Ubuntu GCC
-      if: hashFiles('artifacts/build-ubuntu-latest-gcc.zip') != ''
-      uses: actions/upload-release-asset@v1
+        files: release-files/*.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: artifacts/build-ubuntu-latest-gcc.zip
-        asset_name: build-ubuntu-latest-gcc.zip
-        asset_content_type: application/zip
-
-    - name: Upload Ubuntu Clang
-      if: hashFiles('artifacts/build-ubuntu-latest-clang.zip') != ''
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: artifacts/build-ubuntu-latest-clang.zip
-        asset_name: build-ubuntu-latest-clang.zip
-        asset_content_type: application/zip
-
-    - name: Upload Windows MSVC
-      if: hashFiles('artifacts/build-windows-latest-cl.zip') != ''
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: artifacts/build-windows-latest-cl.zip
-        asset_name: build-windows-latest-cl.zip
-        asset_content_type: application/zip
