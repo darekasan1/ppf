@@ -8,6 +8,6 @@ cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
 make
 ```
 # リリースにあるやつはどうなん？
-リリースのやつは全てx86_64用です。また、依存をなくすためNEONやAVXへの最適化などありません。NEONだけエンジン上げときました
+リリースのやつはやっとaarch64に対応しました。
 # 使ったAIは？
 Claude、Gemini、ChatGPT
