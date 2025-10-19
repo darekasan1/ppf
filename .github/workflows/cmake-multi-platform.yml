@@ -47,7 +47,9 @@ jobs:
         if [ -d "neon" ]; then
           if [ -f "neon/CMakeLists.txt" ]; then
             cp neon/CMakeLists.txt CMakeLists.txt
-            echo "Replaced CMakeLists.txt with NEON version"
+            # -march=native を -march=armv8-a+simd に置き換え
+            sed -i 's/-march=native/-march=armv8-a+simd/g' CMakeLists.txt
+            echo "Replaced CMakeLists.txt with NEON version (fixed -march)"
           fi
           if [ -f "neon/synth_engine.cpp" ]; then
             cp neon/synth_engine.cpp synth_engine.cpp
