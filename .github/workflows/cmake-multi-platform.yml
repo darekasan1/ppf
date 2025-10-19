@@ -13,30 +13,88 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        build_type: [Release]
-        c_compiler: [gcc, clang, cl]
         include:
+          # Windows x64
           - os: windows-latest
             c_compiler: cl
             cpp_compiler: cl
-          - os: ubuntu-latest
-            c_compiler: gcc
-            cpp_compiler: g++
+            arch: x64
+            build_type: Release
+          
+          # Linux x64
           - os: ubuntu-latest
             c_compiler: clang
             cpp_compiler: clang++
-        exclude:
-          - os: windows-latest
-            c_compiler: gcc
-          - os: windows-latest
-            c_compiler: clang
+            arch: x64
+            build_type: Release
+          
+          # Linux ARM64
           - os: ubuntu-latest
-            c_compiler: cl
+            c_compiler: clang
+            cpp_compiler: clang++
+            arch: aarch64
+            build_type: Release
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+
+    # aarch64ビルド時にNEON最適化版に置き換え
+    - name: Replace with NEON optimized files
+      if: matrix.arch == 'aarch64'
+      shell: bash
+      run: |
+        if [ -d "neon" ]; then
+          if [ -f "neon/CMakeLists.txt" ]; then
+            cp neon/CMakeLists.txt CMakeLists.txt
+            echo "Replaced CMakeLists.txt with NEON version"
+          fi
+          if [ -f "neon/synth_engine.cpp" ]; then
+            cp neon/synth_engine.cpp synth_engine.cpp
+            echo "Replaced synth_engine.cpp with NEON version"
+          fi
+        fi
+
+    # apt パッケージキャッシュ
+    - name: Cache apt packages
+      if: runner.os == 'Linux'
+      uses: actions/cache@v4
+      with:
+        path: |
+          /var/cache/apt/archives
+          /var/lib/apt/lists
+        key: ${{ runner.os }}-apt-${{ matrix.arch }}-${{ hashFiles('.github/workflows/*.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-${{ matrix.arch }}-
+          ${{ runner.os }}-apt-
+
+    # ARM クロスコンパイル環境セットアップ
+    - name: Install ARM cross-compile tools
+      if: runner.os == 'Linux' && matrix.arch == 'aarch64'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        echo "CMAKE_TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/.github/toolchains/aarch64.cmake" >> $GITHUB_ENV
+
+    - name: Create ARM toolchain files
+      if: runner.os == 'Linux' && matrix.arch == 'aarch64'
+      run: |
+        mkdir -p .github/toolchains
+        cat > .github/toolchains/aarch64.cmake << 'EOF'
+        set(CMAKE_SYSTEM_NAME Linux)
+        set(CMAKE_SYSTEM_PROCESSOR aarch64)
+        set(CMAKE_C_COMPILER clang)
+        set(CMAKE_CXX_COMPILER clang++)
+        set(CMAKE_C_COMPILER_TARGET aarch64-linux-gnu)
+        set(CMAKE_CXX_COMPILER_TARGET aarch64-linux-gnu)
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=armv8-a+simd")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+simd")
+        set(CMAKE_FIND_ROOT_PATH /usr/aarch64-linux-gnu)
+        set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+        set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+        set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+        add_definitions(-DUSE_NEON)
+        EOF
 
     - name: Set reusable strings
       id: strings
@@ -48,16 +106,16 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ${{ steps.strings.outputs.build-output-dir }}
-        key: ${{ runner.os }}-${{ matrix.c_compiler }}-cmake-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+        key: ${{ runner.os }}-${{ matrix.c_compiler }}-${{ matrix.arch }}-cmake-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
         restore-keys: |
-          ${{ runner.os }}-${{ matrix.c_compiler }}-cmake-
+          ${{ runner.os }}-${{ matrix.c_compiler }}-${{ matrix.arch }}-cmake-
 
-    # コンパイラキャッシュ (ccache for Linux, sccache for all)
+    # コンパイラキャッシュ
     - name: Setup ccache (Linux)
       if: runner.os == 'Linux'
       uses: hendrikmuhs/ccache-action@v1.2
       with:
-        key: ${{ matrix.os }}-${{ matrix.c_compiler }}
+        key: ${{ matrix.os }}-${{ matrix.c_compiler }}-${{ matrix.arch }}
         max-size: 500M
 
     - name: Setup sccache (Windows)
@@ -70,12 +128,14 @@ jobs:
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        ${{ env.CMAKE_TOOLCHAIN }}
         -S ${{ github.workspace }}
 
     - name: Build
       run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }}
 
     - name: Test
+      if: matrix.arch == 'x64'
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: ctest --build-config ${{ matrix.build_type }}
 
@@ -84,20 +144,20 @@ jobs:
       if: matrix.os != 'windows-latest'
       shell: bash
       run: |
-        zip -r build-${{ matrix.os }}-${{ matrix.c_compiler }}.zip ${{ steps.strings.outputs.build-output-dir }}
+        zip -r build-${{ matrix.os }}-${{ matrix.c_compiler }}-${{ matrix.arch }}.zip ${{ steps.strings.outputs.build-output-dir }}
 
     # Windows 用 zip
     - name: Package artifact (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        Compress-Archive -Path "${{ steps.strings.outputs.build-output-dir }}\*" -DestinationPath "build-${{ matrix.os }}-${{ matrix.c_compiler }}.zip"
+        Compress-Archive -Path "${{ steps.strings.outputs.build-output-dir }}\*" -DestinationPath "build-${{ matrix.os }}-${{ matrix.c_compiler }}-${{ matrix.arch }}.zip"
 
     - name: Upload artifact for release
       uses: actions/upload-artifact@v4
       with:
-        name: build-${{ matrix.os }}-${{ matrix.c_compiler }}
-        path: build-${{ matrix.os }}-${{ matrix.c_compiler }}.zip
+        name: build-${{ matrix.os }}-${{ matrix.c_compiler }}-${{ matrix.arch }}
+        path: build-${{ matrix.os }}-${{ matrix.c_compiler }}-${{ matrix.arch }}.zip
 
   release:
     needs: build
